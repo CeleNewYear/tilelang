@@ -828,6 +828,8 @@ public:
     buffer_alias_analyzer.Analyze(root);
     buffer_alias_analyzer.Validate();
     buffer_aliases_ = buffer_alias_analyzer.GetAliases();
+    reuse_orderings_ = buffer_alias_analyzer.GetReuseOrderings();
+    AddReuseSyncPoints();
   }
 
   const SyncSiteRegistry &SiteRegistry() const { return site_registry_; }
@@ -1093,6 +1095,69 @@ private:
     size_t index = sync_points_.size();
     sync_points_.push_back(std::move(sync_point));
     return index;
+  }
+
+  // Materialize the cross-owner M -> MTE1 completion edge required by serial
+  // ring-slot reuse. When two sibling serial loops alias the same physical L0
+  // slots, the second loop's MTE1 load writes a slot while the first loop's M
+  // read of that slot may still be in flight: the per-loop ring protocol only
+  // orders MTE1 against that same loop's M reads, so the cross-loop WAR race
+  // is not covered (HasImplicitSamePipeOrder("M") cannot help either, because
+  // MTE1 and M are different pipes).
+  //
+  // Plan (A): one guarded set/wait pair on a single event.
+  //   set  : after the first loop's last M access (its final iteration, sk==1)
+  //   wait : before the second loop's first MTE1 access (its first iteration,
+  //          sk==0)
+  // The set site is guarded to the first loop's final iteration and the wait
+  // site to the second loop's first iteration by the SyncInsertionSite loop
+  // guards (at_beginning=false appends the last-iteration condition, true the
+  // first-iteration condition). This is one set and one wait, so the binary
+  // latch cannot deadlock (no "N sets then N waits" hazard). It also covers
+  // both slots: every first-loop M read of a shared slot completes before its
+  // final M access, and every second-loop MTE1 write is program-ordered after
+  // its first-iteration write, which now waits on that final M access.
+  //
+  // These points are appended after AnalyzeNodeList, so they intentionally skip
+  // OptimizeFlagVersions / OptimizeSyncPoints / RecordReusablePairs. We keep
+  // num_versions = 1 (a constant event id) and never enter reusable_pairs_, so
+  // the flag allocator gives each reuse edge an independent event id and cannot
+  // alias it with the per-loop ring flags.
+  void AddReuseSyncPoints() {
+    for (const ReuseSyncOrdering &ordering : reuse_orderings_) {
+      TaskNode *producer = ordering.last_task;
+      TaskNode *consumer = ordering.first_task;
+      if (producer == nullptr || consumer == nullptr ||
+          ordering.first_loop == nullptr || ordering.second_loop == nullptr) {
+        continue;
+      }
+      ControlNode *common_scope = ordering.first_loop->GetParentControl();
+      ICHECK(ordering.second_loop->GetParentControl() == common_scope)
+          << "Reuse ordering endpoints must be sibling controls";
+      int domain_id = domains_.UnconditionalLexicalDomain(common_scope);
+      auto expand_cores = [](CoreMask task_mask) {
+        std::vector<CoreMask> result;
+        for (CoreMask core : kConcreteCores) {
+          if (HasCore(task_mask, core))
+            result.push_back(core);
+        }
+        return result;
+      };
+      for (CoreMask producer_core : expand_cores(producer->GetCoreMask())) {
+        for (CoreMask consumer_core : expand_cores(consumer->GetCoreMask())) {
+          size_t producer_site = site_registry_.FindSiteId(SyncInsertionSiteKey{
+              ordering.first_loop, producer, /*at_beginning=*/false,
+              producer_core, domain_id});
+          size_t consumer_site = site_registry_.FindSiteId(SyncInsertionSiteKey{
+              ordering.second_loop, consumer, /*at_beginning=*/true,
+              consumer_core, domain_id});
+          AppendSyncPoint(SyncPoint(
+              DepEdge(producer_site, consumer_site, /*distance=*/0,
+                      /*strict=*/true),
+              DependencyKind::kData, /*num_versions=*/1, common_scope));
+        }
+      }
+    }
   }
 
   bool IsFullRingCounterSync(const SyncPoint &sync_point,
@@ -1746,6 +1811,7 @@ private:
   std::unordered_map<ControlNode *, std::map<CounterSyncSignature, int>>
       counter_channel_occurrences_;
   BufferAliasMap buffer_aliases_;
+  std::vector<ReuseSyncOrdering> reuse_orderings_;
   bool disable_buffer_reuse_{false};
 };
 

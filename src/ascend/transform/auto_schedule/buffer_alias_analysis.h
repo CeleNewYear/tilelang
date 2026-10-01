@@ -31,9 +31,12 @@
 #include <tvm/tirx/stmt_functor.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
+#include <iostream>
 #include <map>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -57,6 +60,18 @@ namespace ascend {
 struct StorageIterationPeriod {
   int64_t iterations{1};
   bool implicit_slots{false};
+};
+
+// A cross-loop reuse decided purely on serial program order. The sync pass
+// materializes the missing cross-queue completion edge between the last access
+// of the first loop and the first access of the second loop.
+struct ReuseSyncOrdering {
+  tirx::Var first_storage;
+  tirx::Var second_storage;
+  ControlNode *first_loop{nullptr};
+  ControlNode *second_loop{nullptr};
+  TaskNode *last_task{nullptr};   // last access to first_storage
+  TaskNode *first_task{nullptr};  // first access to second_storage
 };
 
 // Scope-aware view of guaranteed synchronization. The context owns site and
@@ -410,6 +425,9 @@ public:
 
   const BufferAliasMap &GetAliases() const { return buffer_aliases_; }
   void Validate() const { ValidateBufferAliasMap(buffer_aliases_); }
+  const std::vector<ReuseSyncOrdering> &GetReuseOrderings() const {
+    return reuse_orderings_;
+  }
 
 private:
   HappensBeforeQuery MakeHappensBeforeQuery(ControlNode *scope) const {
@@ -507,12 +525,48 @@ private:
         }
       }
     }
+    if (const char *dbg = getenv("TL_DEBUG_ALIAS")) {
+      std::cerr << "[alias] BuildStorageLifetime storage="
+                << info.storage->name_hint
+                << " loop=" << (loop ? loop->control->loop_var->name_hint : "<root>")
+                << " direct.valid=" << direct.valid
+                << " summary_control="
+                << (child ? child->control->loop_var->name_hint : "<null>")
+                << " child_has_summary="
+                << (child != nullptr &&
+                            lifetime_summaries_.find(child) !=
+                                lifetime_summaries_.end() &&
+                            lifetime_summaries_.find(child)->second.find(
+                                info.storage) !=
+                                lifetime_summaries_.find(child)->second.end())
+                << "\n";
+    }
     return BuildCompositeStorageLifetime(info, loop);
   }
 
   bool CanAliasStorageLifetimes(
       const LifetimeSummary &lhs, const LifetimeSummary &rhs, ControlNode *loop,
       const HappensBeforeQuery &current_happens_before) const {
+    if (getenv("TL_DEBUG_ALIAS")) {
+      auto ctl_name = [](ControlNode *c) {
+        return c ? std::string(c->control->loop_var->name_hint) : std::string("<null>");
+      };
+      std::cerr << "[alias] CanAlias " << lhs.storage->name_hint << " vs "
+                << rhs.storage->name_hint << " loop="
+                << (loop ? loop->control->loop_var->name_hint : "<root>")
+                << " lhs.sc=" << ctl_name(lhs.summary_control)
+                << " rhs.sc=" << ctl_name(rhs.summary_control)
+                << " lhs.comp=" << lhs.components.size()
+                << " rhs.comp=" << rhs.components.size()
+                << " lhs.gen=" << lhs.generations.size()
+                << " rhs.gen=" << rhs.generations.size()
+                << " lhs.live_in=" << lhs.live_in
+                << " rhs.live_in=" << rhs.live_in
+                << " lhs.live_out=" << lhs.live_out
+                << " rhs.live_out=" << rhs.live_out
+                << " lhs.live_through=" << lhs.live_through
+                << " rhs.live_through=" << rhs.live_through << "\n";
+    }
     if (lhs.summary_control != nullptr &&
         lhs.summary_control == rhs.summary_control) {
       return false;
@@ -528,6 +582,14 @@ private:
         if (lhs_component.control != rhs_component.control ||
             lhs_component.generations.empty() ||
             rhs_component.generations.empty()) {
+          if (getenv("TL_DEBUG_ALIAS")) {
+            auto ctl_name = [](ControlNode *c) {
+              return c ? std::string(c->control->loop_var->name_hint) : std::string("<null>");
+            };
+            std::cerr << "[alias]   component mismatch: lhs.ctl="
+                      << ctl_name(lhs_component.control)
+                      << " rhs.ctl=" << ctl_name(rhs_component.control) << "\n";
+          }
           return false;
         }
         HappensBeforeQuery component_happens_before =
@@ -604,6 +666,28 @@ private:
     if (lhs.generations.empty() || rhs.generations.empty())
       return true;
 
+    // Serial sibling loops: two single-generation summaries promoted from
+    // disjoint sibling controls (direct children of this scope) never overlap
+    // in program order. Their cross-queue completion ordering is inserted by
+    // the synchronization pass as a hard event, so declaring the alias here is
+    // safe (the per-pipe completion edge is synthesized separately).
+    auto is_promoted_single_generation = [](const LifetimeSummary &summary) {
+      return summary.summary_control != nullptr && summary.components.empty() &&
+             !summary.generations.empty() && !summary.live_in &&
+             !summary.live_out && !summary.live_through &&
+             summary.live_in_end_sites.empty() &&
+             summary.live_out_begin_sites.empty();
+    };
+    if (is_promoted_single_generation(lhs) &&
+        is_promoted_single_generation(rhs) &&
+        GetPtrStorageScope(lhs.storage) == GetPtrStorageScope(rhs.storage) &&
+        lhs.summary_control->GetParent() == loop &&
+        rhs.summary_control->GetParent() == loop &&
+        CompareIRStructure(lhs.summary_control, rhs.summary_control) != 0) {
+      RecordSerialReuseOrdering(lhs, rhs);
+      return true;
+    }
+
     MutuallyExclusiveQuery mutually_exclusive = [&](const PrimExpr &a,
                                                     const PrimExpr &b) {
       return ProveMutuallyExclusive(a, b, loop);
@@ -612,6 +696,30 @@ private:
                                loop != nullptr, current_happens_before,
                                MakeMinimumDistanceQuery(loop),
                                mutually_exclusive);
+  }
+
+  void RecordSerialReuseOrdering(const LifetimeSummary &lhs,
+                                 const LifetimeSummary &rhs) const {
+    bool lhs_first = CompareIRStructure(lhs.summary_control,
+                                        rhs.summary_control) < 0;
+    const LifetimeSummary &first = lhs_first ? lhs : rhs;
+    const LifetimeSummary &second = lhs_first ? rhs : lhs;
+    auto first_info = storage_access_info_.find(first.storage);
+    auto second_info = storage_access_info_.find(second.storage);
+    if (first_info == storage_access_info_.end() ||
+        second_info == storage_access_info_.end() ||
+        first_info->second.accesses.empty() ||
+        second_info->second.accesses.empty()) {
+      return;
+    }
+    ReuseSyncOrdering ordering;
+    ordering.first_storage = first.storage;
+    ordering.second_storage = second.storage;
+    ordering.first_loop = first.summary_control;
+    ordering.second_loop = second.summary_control;
+    ordering.last_task = first_info->second.accesses.back().task;
+    ordering.first_task = second_info->second.accesses.front().task;
+    reuse_orderings_.push_back(std::move(ordering));
   }
 
   using VarExprMap =
@@ -1481,6 +1589,7 @@ private:
   std::vector<Var> storage_order_;
   std::map<ControlNode *, LifetimeSummaryMap> lifetime_summaries_;
   BufferAliasMap buffer_aliases_;
+  mutable std::vector<ReuseSyncOrdering> reuse_orderings_;
 };
 
 } // namespace buffer_alias_analysis_detail
@@ -1503,6 +1612,9 @@ public:
 
   const BufferAliasMap &GetAliases() const { return impl_.GetAliases(); }
   void Validate() const { impl_.Validate(); }
+  const std::vector<ReuseSyncOrdering> &GetReuseOrderings() const {
+    return impl_.GetReuseOrderings();
+  }
 
 private:
   buffer_alias_analysis_detail::BufferAliasAnalyzerImpl impl_;
