@@ -62,6 +62,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           platforms: linux/${{ matrix.arch }}
+          # `tags` is required even when pushing by digest: it selects the
+          # repository the per-arch manifest is pushed to.
+          tags: ${{ env.IMAGE }}
           file: docker/Dockerfile.ascend
           context: .
           pull: true
