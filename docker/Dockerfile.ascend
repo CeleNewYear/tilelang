@@ -1,0 +1,152 @@
+# syntax=docker/dockerfile:1
+#
+# Ascend 950 CI image.
+#
+# Contents:
+#   * CANN 9.3.0 weekly (toolkit + 950 ops) installed from the weekly .run
+#     packages published on the Ascend run mirror.
+#   * Python 3.12.14 at /usr/local/python3.12.14, matching the layout used by
+#     the public CANN base images.
+#   * TileLang's Python dependencies (torch / torch_npu pinned, plus
+#     requirements*.txt). TileLang itself is deliberately NOT installed: the CI
+#     job builds the checkout under test.
+#
+# Built for linux/amd64 and linux/arm64 by
+# .github/workflows/build-ascend-ci-image.yml and published to
+# quay.io/celenewyear/tilelang-ascend.
+
+ARG BASE=ubuntu:22.04
+
+# --------------------------------------------------------------------------- #
+# Stage 1: Python
+# --------------------------------------------------------------------------- #
+FROM ${BASE} AS python-builder
+ARG PY_VERSION=3.12.14
+ENV PATH=/usr/local/python${PY_VERSION}/bin:${PATH}
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+        ca-certificates curl bash build-essential libssl-dev zlib1g-dev \
+        libncurses5-dev libbz2-dev libreadline-dev libsqlite3-dev libffi-dev \
+        libnss3-dev libgdbm-dev liblzma-dev libev-dev xz-utils \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /var/tmp/*
+
+RUN curl -fsSL "https://repo.huaweicloud.com/python/${PY_VERSION}/Python-${PY_VERSION}.tgz" -o /tmp/python.tgz \
+    && mkdir -p /tmp/py \
+    && tar -xf /tmp/python.tgz -C /tmp/py \
+    && cd "/tmp/py/Python-${PY_VERSION}" \
+    && ./configure --enable-shared --prefix="/usr/local/python${PY_VERSION}" \
+         LDFLAGS="-Wl,-rpath /usr/local/python${PY_VERSION}/lib" \
+    && make -j"$(nproc)" \
+    && make altinstall \
+    && ln -sf "/usr/local/python${PY_VERSION}/bin/python3.12" "/usr/local/python${PY_VERSION}/bin/python3" \
+    && ln -sf "/usr/local/python${PY_VERSION}/bin/python3.12" "/usr/local/python${PY_VERSION}/bin/python" \
+    && ln -sf "/usr/local/python${PY_VERSION}/bin/pip3.12" "/usr/local/python${PY_VERSION}/bin/pip3" \
+    && ln -sf "/usr/local/python${PY_VERSION}/bin/pip3.12" "/usr/local/python${PY_VERSION}/bin/pip" \
+    && rm -rf /tmp/python.tgz /tmp/py
+
+# --------------------------------------------------------------------------- #
+# Stage 2: CANN 9.3.0 weekly (toolkit + 950 ops)
+# --------------------------------------------------------------------------- #
+FROM python-builder AS cann-builder
+ARG PY_VERSION=3.12.14
+ARG CANN_MIRROR=https://ascend.devcloud.huaweicloud.com/artifactory/cann-run-mirror/software/master
+ARG CANN_BUILD=20260930000324083
+ARG CANN_VERSION=9.3.0~weekly.20260930.01
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+        git wget gcc g++ make cmake zlib1g openssl unzip pciutils net-tools \
+        libblas-dev libblas3 gfortran patchelf \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /var/tmp/*
+
+# Runtime packages the CANN toolchain expects to be present.
+RUN python3 -m pip install --no-cache-dir --upgrade pip \
+    && python3 -m pip install --no-cache-dir \
+        attrs cython numpy decorator sympy cffi pyyaml pathlib2 \
+        psutil protobuf==3.20 scipy requests absl-py
+
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) arch=x86_64 ;; \
+      arm64) arch=aarch64 ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    base="${CANN_MIRROR}/${CANN_BUILD}"; \
+    wget -q --tries=3 --timeout=120 \
+        "${base}/Ascend-cann-toolkit_${CANN_VERSION}_linux-${arch}.run" -O /tmp/toolkit.run; \
+    wget -q --tries=3 --timeout=120 \
+        "${base}/Ascend-cann-950-ops_${CANN_VERSION}_linux-${arch}.run" -O /tmp/ops.run; \
+    chmod +x /tmp/toolkit.run /tmp/ops.run; \
+    /tmp/toolkit.run --quiet --install --install-for-all; \
+    /tmp/ops.run --quiet --install --install-for-all; \
+    rm -f /tmp/toolkit.run /tmp/ops.run; \
+    mkdir -p /etc/Ascend; \
+    cann_dir="$(ls -d /usr/local/Ascend/cann-[0-9]* 2>/dev/null | head -n1)"; \
+    test -n "${cann_dir}"; \
+    ln -sfn "${cann_dir}" /usr/local/Ascend/cann-current; \
+    echo "CANN installed at ${cann_dir} -> /usr/local/Ascend/cann-current"; \
+    test -x "${cann_dir}/bin/bisheng" && echo "bisheng present" || echo "WARNING: bisheng missing"
+
+# --------------------------------------------------------------------------- #
+# Stage 3: runtime image
+# --------------------------------------------------------------------------- #
+FROM ${BASE} AS final
+ARG PY_VERSION=3.12.14
+
+ENV PATH=/usr/local/python${PY_VERSION}/bin:${PATH}
+ENV LD_LIBRARY_PATH=/usr/local/python${PY_VERSION}/lib:${LD_LIBRARY_PATH}
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+        apt-transport-https ca-certificates bash libc6 libsqlite3-dev gcc g++ make cmake \
+        git vim wget jq curl build-essential libnuma-dev libblas3 gfortran patchelf \
+        unzip pciutils net-tools \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /var/tmp/*
+
+COPY --from=cann-builder /usr/local/python${PY_VERSION} /usr/local/python${PY_VERSION}
+COPY --from=cann-builder /usr/local/Ascend /usr/local/Ascend
+COPY --from=cann-builder /etc/Ascend /etc/Ascend
+
+# CANN environment, mirrors the public CANN base images. /usr/local/Ascend/cann-current
+# is a symlink to the versioned directory created by the installer.
+ENV ASCEND_TOOLKIT_HOME=/usr/local/Ascend/cann-current
+ENV ASCEND_HOME_PATH=/usr/local/Ascend/cann-current
+ENV ASCEND_AICPU_PATH=/usr/local/Ascend/cann-current
+ENV ASCEND_OPP_PATH=/usr/local/Ascend/cann-current/opp
+ENV TOOLCHAIN_HOME=/usr/local/Ascend/cann-current/toolkit
+ENV ASCEND_TOOLKIT_LATEST_HOME=/usr/local/Ascend/ascend-toolkit/latest
+ENV CMAKE_PREFIX_PATH=/usr/local/Ascend/cann-current/toolkit/tools/tikicpulib/lib/cmake:/usr/local/Ascend/cann-current/lib64/cmake
+ENV PYTHONPATH=/usr/local/Ascend/cann-current/python/site-packages:/usr/local/Ascend/cann-current/opp/built-in/op_impl/ai_core/tbe
+ENV PATH=/usr/local/Ascend/cann-current/bin:/usr/local/Ascend/cann-current/tools/ccec_compiler/bin:/usr/local/Ascend/cann-current/tools/profiler/bin:$PATH
+ENV LD_LIBRARY_PATH=/usr/local/Ascend/cann-current/lib64:/usr/local/Ascend/cann-current/lib64/plugin/opskernel:/usr/local/Ascend/cann-current/lib64/plugin/nnengine:/usr/local/Ascend/cann-current/opp/built-in/op_impl/ai_core/tbe/op_tiling:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:$LD_LIBRARY_PATH
+
+# The cluster has no direct route to pypi.org; point pip at a reachable mirror.
+RUN printf '%s\n' \
+        '[global]' \
+        'index-url = https://repo.huaweicloud.com/repository/pypi/simple' \
+        'extra-index-url = https://download.pytorch.org/whl/cpu' \
+        'trusted-host = repo.huaweicloud.com' \
+        'timeout = 120' > /etc/pip.conf
+
+# TileLang's Python dependencies (torch / torch_npu pinned; no tilelang itself).
+COPY requirements.txt requirements-test.txt requirements-lint.txt /tmp/tilelang-deps/
+RUN set -eux; \
+    cd /tmp/tilelang-deps; \
+    printf 'torch==2.10.0+cpu\ntorch_npu==2.10.0\n' > /tmp/constraints.txt; \
+    python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
+    python3 -m pip install --no-cache-dir --constraint /tmp/constraints.txt \
+        "torch==2.10.0+cpu" --index-url https://download.pytorch.org/whl/cpu; \
+    python3 -m pip install --no-cache-dir --constraint /tmp/constraints.txt "torch_npu==2.10.0"; \
+    python3 -m pip install --no-cache-dir --constraint /tmp/constraints.txt \
+        -r requirements-test.txt pybind11==2.12.0; \
+    rm -rf /tmp/tilelang-deps /tmp/constraints.txt; \
+    python3 -c "import torch, torch_npu; print('torch', torch.__version__, '| torch_npu', torch_npu.__version__)"
+
+SHELL ["/bin/bash", "-c"]
+WORKDIR /workspace
+
+ENTRYPOINT ["/bin/bash", "-c", "source /usr/local/Ascend/ascend-toolkit/set_env.sh 2>/dev/null; for f in /usr/local/Ascend/cann-*/share/info/ascendnpu-ir/bin/set_env.sh; do [ -f \"$f\" ] && . \"$f\"; done; exec \"$@\"", "--"]
