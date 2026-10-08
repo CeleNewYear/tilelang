@@ -135,9 +135,13 @@ RUN printf '%s\n' \
         'timeout = 120' > /etc/pip.conf
 
 # TileLang's Python dependencies (torch / torch_npu pinned; no tilelang itself).
+# The install and the import check run against the image's own library paths:
+# the CANN lib directories belong to the runtime environment (set_env.sh
+# re-adds them) and shadowing them here breaks the torch/MKL loader.
 COPY requirements.txt requirements-test.txt requirements-lint.txt /tmp/tilelang-deps/
 RUN set -eux; \
     cd /tmp/tilelang-deps; \
+    export LD_LIBRARY_PATH="/usr/local/python${PY_VERSION}/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"; \
     printf 'torch==2.10.0+cpu\ntorch_npu==2.10.0\n' > /tmp/constraints.txt; \
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
     python3 -m pip install --no-cache-dir --constraint /tmp/constraints.txt \
@@ -146,6 +150,8 @@ RUN set -eux; \
     python3 -m pip install --no-cache-dir --constraint /tmp/constraints.txt \
         -r requirements-test.txt pybind11==2.12.0; \
     rm -rf /tmp/tilelang-deps /tmp/constraints.txt; \
+    echo '--- unresolved deps of libtorch_cpu.so ---'; \
+    ldd "$(python3 -c 'import importlib.util; print(importlib.util.find_spec("torch").submodule_search_locations[0])')/lib/libtorch_cpu.so" | grep 'not found' || echo '(none)'; \
     python3 -c "import torch; print('torch', torch.__version__)"; \
     python3 -c "import importlib.util, sys; ok = importlib.util.find_spec('torch_npu') is not None; print('torch_npu installed:', ok); sys.exit(0 if ok else 1)"
 
