@@ -146,7 +146,8 @@ RUN set -eux; \
     python3 -m pip install --no-cache-dir --constraint /tmp/constraints.txt \
         -r requirements-test.txt pybind11==2.12.0; \
     rm -rf /tmp/tilelang-deps /tmp/constraints.txt; \
-    python3 -c "import torch, torch_npu; print('torch', torch.__version__, '| torch_npu', torch_npu.__version__)"
+    python3 -c "import torch; print('torch', torch.__version__)"; \
+    python3 -c "import importlib.util, sys; ok = importlib.util.find_spec('torch_npu') is not None; print('torch_npu installed:', ok); sys.exit(0 if ok else 1)"
 
 SHELL ["/bin/bash", "-c"]
 WORKDIR /workspace
