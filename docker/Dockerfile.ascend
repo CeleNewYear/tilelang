@@ -51,6 +51,8 @@ RUN curl -fsSL "https://repo.huaweicloud.com/python/${PY_VERSION}/Python-${PY_VE
 # --------------------------------------------------------------------------- #
 FROM python-builder AS cann-builder
 ARG PY_VERSION=3.12.14
+# Provided by BuildKit for `--platform` builds; must be declared to be visible.
+ARG TARGETARCH
 ARG CANN_MIRROR=https://ascend.devcloud.huaweicloud.com/artifactory/cann-run-mirror/software/master
 ARG CANN_BUILD=20260930000324083
 ARG CANN_VERSION=9.3.0~weekly.20260930.01
