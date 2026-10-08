@@ -149,11 +149,12 @@ RUN set -eux; \
     python3 -m pip install --no-cache-dir --constraint /tmp/constraints.txt "torch_npu==2.10.0"; \
     python3 -m pip install --no-cache-dir --constraint /tmp/constraints.txt \
         -r requirements-test.txt pybind11==2.12.0; \
-    rm -rf /tmp/tilelang-deps /tmp/constraints.txt; \
+    cd /; \
     echo '--- unresolved deps of libtorch_cpu.so ---'; \
     ldd "$(python3 -c 'import importlib.util; print(importlib.util.find_spec("torch").submodule_search_locations[0])')/lib/libtorch_cpu.so" | grep 'not found' || echo '(none)'; \
     python3 -c "import torch; print('torch', torch.__version__)"; \
-    python3 -c "import importlib.util, sys; ok = importlib.util.find_spec('torch_npu') is not None; print('torch_npu installed:', ok); sys.exit(0 if ok else 1)"
+    python3 -c "import importlib.util, sys; ok = importlib.util.find_spec('torch_npu') is not None; print('torch_npu installed:', ok); sys.exit(0 if ok else 1)"; \
+    rm -rf /tmp/tilelang-deps /tmp/constraints.txt
 
 SHELL ["/bin/bash", "-c"]
 WORKDIR /workspace
