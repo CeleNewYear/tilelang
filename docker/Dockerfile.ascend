@@ -3,8 +3,8 @@
 # Ascend 950 CI image.
 #
 # Contents:
-#   * CANN 9.3.0 weekly (toolkit + 950 ops) installed from the weekly .run
-#     packages published on the Ascend run mirror.
+#   * CANN 9.3.0 weekly (20261021) toolkit + 950 ops installed from the weekly
+#     .run packages published on the Ascend run mirror.
 #   * Python 3.12.14 at /usr/local/python3.12.14, matching the layout used by
 #     the public CANN base images.
 #   * TileLang's Python dependencies (torch / torch_npu pinned, plus
@@ -54,8 +54,8 @@ ARG PY_VERSION=3.12.14
 # Provided by BuildKit for `--platform` builds; must be declared to be visible.
 ARG TARGETARCH
 ARG CANN_MIRROR=https://ascend.devcloud.huaweicloud.com/artifactory/cann-run-mirror/software/master
-ARG CANN_BUILD=20260930000324083
-ARG CANN_VERSION=9.3.0~weekly.20260930.01
+ARG CANN_BUILD=20261021000325976
+ARG CANN_VERSION=9.3.0~weekly.20261021.01
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
