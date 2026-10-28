@@ -1,27 +1,42 @@
 name: Build Ascend CI image
 
-# Builds the Ascend 950 CI container image for linux/amd64 and linux/arm64 on
+# Builds one Ascend 950 CI container image for linux/amd64 and linux/arm64 on
 # GitHub-hosted runners (arm64 uses GitHub's official `ubuntu-22.04-arm`), and
 # publishes a multi-arch manifest to quay.io/celenewyear/tilelang-ascend.
 #
-# The image contains the CANN 9.3.0 weekly (20261021) toolkit + 950 ops and
-# TileLang's Python dependencies, but not TileLang itself.
+# The image contains a CANN release plus TileLang's Python dependencies, but not
+# TileLang itself. One Dockerfile per CANN release lives in docker/:
+#
+#   docker/Dockerfile.ascend              CANN 9.3.0 weekly 20261021
+#   docker/Dockerfile.ascend.cann9.2.0    CANN 9.2.0 (stable)
+#
+# Dispatch the workflow with `dockerfile` and `tag` to build a specific one; a
+# push that touches docker/Dockerfile.ascend rebuilds the default image.
 
 on:
   workflow_dispatch:
+    inputs:
+      dockerfile:
+        description: Dockerfile to build.
+        type: string
+        required: false
+        default: docker/Dockerfile.ascend
+      tag:
+        description: Image tag to publish.
+        type: string
+        required: false
+        default: cann9.3.0-weekly.20261021-ubuntu22.04-py3.12
   push:
     branches:
       - ascend-ci-image
     paths:
       - "docker/Dockerfile.ascend"
-      - ".github/workflows/build-ascend-ci-image.yml"
 
 permissions:
   contents: read
 
 env:
   IMAGE: quay.io/celenewyear/tilelang-ascend
-  TAG: cann9.3.0-weekly.20261021-ubuntu22.04-py3.12
 
 jobs:
   build:
@@ -65,7 +80,7 @@ jobs:
           # `tags` is required even when pushing by digest: it selects the
           # repository the per-arch manifest is pushed to.
           tags: ${{ env.IMAGE }}
-          file: docker/Dockerfile.ascend
+          file: ${{ inputs.dockerfile || 'docker/Dockerfile.ascend' }}
           context: .
           pull: true
           outputs: type=image,push-by-digest=true,name-canonical=true,push=true
@@ -110,6 +125,8 @@ jobs:
 
       - name: Create and push the multi-arch manifest
         working-directory: ${{ runner.temp }}/digests
+        env:
+          TAG: ${{ inputs.tag || 'cann9.3.0-weekly.20261021-ubuntu22.04-py3.12' }}
         run: |
           set -eux
           docker buildx imagetools create -t "${IMAGE}:${TAG}" \
