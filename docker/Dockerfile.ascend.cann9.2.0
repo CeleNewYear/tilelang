@@ -138,8 +138,22 @@ ENV TOOLCHAIN_HOME=/usr/local/Ascend/cann-current/toolkit
 ENV ASCEND_TOOLKIT_LATEST_HOME=/usr/local/Ascend/ascend-toolkit/latest
 ENV CMAKE_PREFIX_PATH=/usr/local/Ascend/cann-current/toolkit/tools/tikicpulib/lib/cmake:/usr/local/Ascend/cann-current/lib64/cmake
 ENV PYTHONPATH=/usr/local/Ascend/cann-current/python/site-packages:/usr/local/Ascend/cann-current/opp/built-in/op_impl/ai_core/tbe
-ENV PATH=/usr/local/Ascend/cann-current/bin:/usr/local/Ascend/cann-current/tools/ccec_compiler/bin:/usr/local/Ascend/cann-current/tools/profiler/bin:$PATH
+ENV PATH=/usr/local/Ascend/cann-current/bin:/usr/local/Ascend/cann-current/tools/bisheng_compiler/bin:/usr/local/Ascend/cann-current/tools/ccec_compiler/bin:/usr/local/Ascend/cann-current/tools/profiler/bin:$PATH
+# TileLang looks for the compiler at $BISHENG_HOME/bin/bisheng and then on PATH
+# (tilelang/contrib/bisheng.py). CANN 9.2.0 ships bisheng under
+# tools/bisheng_compiler, so point both at it; a stale BISHENG_HOME is harmless
+# because the lookup requires the binary to exist before it is used.
+ENV BISHENG_HOME=/usr/local/Ascend/cann-current/tools/bisheng_compiler
 ENV LD_LIBRARY_PATH=/usr/local/Ascend/cann-current/lib64:/usr/local/Ascend/cann-current/lib64/plugin/opskernel:/usr/local/Ascend/cann-current/lib64/plugin/nnengine:/usr/local/Ascend/cann-current/opp/built-in/op_impl/ai_core/tbe/op_tiling:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:$LD_LIBRARY_PATH
+
+# TileLang compiles every Ascend kernel with bisheng, so prove the image can
+# resolve it the way tilelang.contrib.bisheng does, instead of publishing an
+# image that only fails once a kernel is built.
+RUN set -eux; \
+    bisheng="$(command -v bisheng)"; \
+    test -x "${bisheng}"; \
+    echo "bisheng: ${bisheng}"; \
+    bisheng --version 2>&1 | head -n 2 || true
 
 # The cluster has no direct route to pypi.org; point pip at a reachable mirror.
 RUN printf '%s\n' \
