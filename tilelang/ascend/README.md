@@ -244,6 +244,76 @@ The same switch enables optional native CANN launch reporting when available.
 It does not start a profiling session: use the Torch NPU profiler or CANN
 profiling tools to collect events.
 
+## CPU simulation
+
+CANN ships a cycle-accurate CPU simulator for Ascend 950: the camodel "PEM
+MODEL" in `<CANN>/tools/simulator/dav_3510` executes real `dav-3510` AI-core
+binaries on the host CPU. Running TileLang kernels on it makes device code
+executable and testable on machines without an NPU, which is useful for
+correctness debugging and CI.
+
+Reaching the simulator needs no API change. CANN's ACL runtime resolves its
+interposable runtime symbols at load time, so mapping the simulator runtime
+before any other CANN library redirects every later ACL call -- TileLang's
+launch path as well as `torch_npu`'s allocations, copies and synchronisation --
+to the simulated device. `import tilelang` performs that mapping when
+`TILELANG_ASCEND_SIM` is set, and `torch.npu.is_available()` then reports a
+simulated device, so existing kernels, targets and tests run unchanged.
+
+The simulator is a build-time opt-in because the mapping has to happen through a
+small shim library:
+
+```bash
+# Configure once, against the CANN installation that ships the simulator.
+USE_ASCEND=ON USE_CUDA=OFF cmake -B build -DTILELANG_ASCEND_SIM=ON .
+# For a pip build, forward the same option through CMAKE_ARGS:
+USE_ASCEND=ON USE_CUDA=OFF CMAKE_ARGS="-DTILELANG_ASCEND_SIM=ON" python -m pip install -v .
+```
+
+`TILELANG_ASCEND_SIM_ARCH` (default `dav-3510`) selects which simulator
+directory to link against; `dav-2201` and `dav-2002` are also recognized.
+
+The `TILELANG_ASCEND_SIM` CMake option builds `libtilelang_ascend_sim.so`, whose
+only purpose is to carry the simulator runtime as link dependencies with an
+inherited search path (see `src/ascend/sim/ascend_sim_shim.cc`). It is off by
+default: a build without it keeps no reference to the simulator and the
+simulation path costs nothing on the host.
+
+```bash
+# Run any Ascend script on the simulated device.
+TILELANG_ASCEND_SIM=1 python examples/ascend/example_vecadd.py --no-bench
+
+# The test suite imports torch from testing/conftest.py before this backend is
+# imported, so tell torch not to bind torch_npu during collection.
+TILELANG_ASCEND_SIM=1 TORCH_DEVICE_BACKEND_AUTOLOAD=0 \
+  python -m pytest testing/ascend/runtime/test_ascend_cpu_sim.py
+```
+
+| Variable | Meaning |
+| --- | --- |
+| `TILELANG_ASCEND_SIM` | Master switch. Unset by default. `1`/`true`/`on`/`yes` enables simulation; a path to the simulator `lib` directory also selects it. |
+| `TILELANG_ASCEND_SIM_LIB_DIR` | Simulator library directory, when it is not under `ASCEND_HOME_PATH`. |
+| `TILELANG_ASCEND_SIM_SHIM` | Explicit `libtilelang_ascend_sim.so` path for a custom build tree. |
+| `TILELANG_ASCEND_SIM_SOC` | SoC name exported as `CAMODEL_SOC_VERSION`, e.g. `Ascend950PR_9599`. Optional. |
+| `TILELANG_ASCEND_SIM_HARD_EXIT` | Defaults to on: terminate with `os._exit` after the simulator work finishes, because the camodel teardown is unsafe during interpreter finalization. Set to `0` to keep Python's own shutdown. Unused under pytest, whose exit status is preserved by the Ascend suite's conftest. |
+
+From Python, `tilelang.ascend.sim` exposes `requested()`, `active()`,
+`sim_lib_dir()`, `synchronize()`, `device_count()` and `hard_exit()`.
+
+Notes:
+
+- Enable simulation before `torch_npu` is imported. `import tilelang` does this
+  automatically; enabling it afterwards is diagnosed at run time.
+- Everything really runs on the CPU. A launch costs seconds and tens of
+  thousands of elements stay within a few seconds, so keep simulated workloads
+  small and use it for correctness, not performance numbers; `msprof`-based
+  benchmarking does not apply.
+- The model writes per-core instruction dumps and `profile_*.toml` files to
+  `CAMODEL_LOG_PATH`, which the bootstrap redirects to
+  `$TILELANG_CACHE_DIR/ascend_sim/log` (default `~/.tilelang/cache`).
+- Device binaries are the same as on hardware, so the compile cache is shared
+  and simulation runs do not recompile kernels.
+
 ## Benchmark
 
 We evaluate TileLang against Torch NPU on Ascend 950 using BF16 GEMM, FP8 casting, and GQA backward, with four shapes per operator. GEMM and GQA (compute-bound) are reported in TFLOP/s, and FP8 casting (memory bound) in effective GB/s.

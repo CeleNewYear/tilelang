@@ -99,6 +99,14 @@ def _init_logger():
 
 from .env import env as env  # noqa: F401
 
+# Ascend CPU simulation: map CANN's camodel simulator runtime into the process
+# before torch/torch_npu (and therefore any CANN library) is imported, so that
+# ACL calls from this process bind to the simulated device.  This is a no-op
+# costing one environment lookup unless TILELANG_ASCEND_SIM is set.
+from . import _ascend_sim as _ascend_sim
+
+_ascend_sim.maybe_enable()
+
 # Skip logger initialization in light import mode
 if not env.is_light_import():
     _init_logger()

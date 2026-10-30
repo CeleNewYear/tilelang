@@ -148,3 +148,102 @@ elseif(NOT WIN32)
   message(STATUS "Linking Ascend runtime against ${TILELANG_ASCENDCL_LIBRARY}")
   list(APPEND TILELANG_ACTIVE_BACKEND_STUB_LINK ${TILELANG_ASCENDCL_LIBRARY})
 endif()
+
+# ==========================================================================
+# Optional: CPU simulation bootstrap shim (CANN camodel / "PEM MODEL")
+# ==========================================================================
+# CANN ships a cycle-accurate CPU simulator that executes real dav-3510
+# AI-core binaries on the host.  Reaching it only requires that its runtime
+# (libruntime_camodel.so + libnpu_drv_camodel.so) is mapped before any other
+# CANN library, so that ACL's interposable cce::runtime symbols bind to the
+# simulator; tilelang/_ascend_sim.py performs that mapping at import time.
+#
+# Those libraries form one mutually recursive, eagerly bound dependency group
+# (libstars.so <-> libffts_model.so) without an $ORIGIN RPATH, so a Python
+# process cannot dlopen any member first: the group is only resolvable as a
+# single load request.  This target builds an otherwise empty shim whose
+# DT_NEEDED entries and inherited DT_RPATH (old-style, hence
+# --disable-new-dtags) provide exactly that request.
+#
+# Off by default: a build without it behaves exactly as before, keeps no
+# reference to the simulator, and the simulation path costs nothing at host
+# runtime.  Enable with -DTILELANG_ASCEND_SIM=ON on a machine whose CANN
+# installation ships the simulator.
+option(TILELANG_ASCEND_SIM "Build the Ascend CPU-simulation bootstrap shim" OFF)
+set(
+  TILELANG_ASCEND_SIM_ARCH
+  "dav-3510"
+  CACHE STRING "NPU architecture executed by the CANN CPU simulator"
+)
+
+if(TILELANG_ASCEND_SIM)
+  # Architecture -> simulator directory name under <CANN>/tools/simulator.
+  set(_tilelang_sim_arch_dirs
+    "dav-3510" "dav_3510"
+    "dav-2201" "dav_2201"
+    "dav-2002" "dav_2002"
+  )
+  list(FIND _tilelang_sim_arch_dirs "${TILELANG_ASCEND_SIM_ARCH}" _tilelang_sim_index)
+  if(_tilelang_sim_index GREATER -1)
+    math(EXPR _tilelang_sim_index "${_tilelang_sim_index} + 1")
+    list(GET _tilelang_sim_arch_dirs ${_tilelang_sim_index} _tilelang_sim_dir)
+  else()
+    message(FATAL_ERROR
+      "TILELANG_ASCEND_SIM: '${TILELANG_ASCEND_SIM_ARCH}' has no CPU simulator. "
+      "Supported architectures: dav-3510, dav-2201, dav-2002.")
+  endif()
+
+  find_path(
+    _tilelang_sim_lib_dir
+    libruntime_camodel.so
+    HINTS
+      "$ENV{ASCEND_HOME_PATH}"
+      "$ENV{ASCEND_TOOLKIT_HOME}"
+      "${ASCEND_HOME_PATH}"
+      "/usr/local/Ascend/ascend-toolkit/latest"
+    PATH_SUFFIXES
+      "tools/simulator/${_tilelang_sim_dir}/lib"
+      "x86_64-linux/simulator/${_tilelang_sim_dir}/lib"
+      "simulator/${_tilelang_sim_dir}/lib"
+      "${CMAKE_SYSTEM_PROCESSOR}-linux/simulator/${_tilelang_sim_dir}/lib"
+    NO_CACHE
+  )
+
+  if(NOT _tilelang_sim_lib_dir)
+    message(WARNING
+      "TILELANG_ASCEND_SIM is ON but the CANN CPU simulator for "
+      "${TILELANG_ASCEND_SIM_ARCH} was not found. Set ASCEND_HOME_PATH (or "
+      "TILELANG_ASCEND_SIM_LIB_DIR at run time) and reconfigure; only the "
+      "simulation bootstrap shim is skipped, the Ascend backend is unaffected.")
+  else()
+    add_library(tilelang_ascend_sim SHARED src/ascend/sim/ascend_sim_shim.cc)
+    set_target_properties(tilelang_ascend_sim PROPERTIES
+      OUTPUT_NAME "tilelang_ascend_sim"
+      LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+      ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    )
+    target_link_libraries(tilelang_ascend_sim PRIVATE
+      "${_tilelang_sim_lib_dir}/libruntime_camodel.so"
+      "${_tilelang_sim_lib_dir}/libnpu_drv_camodel.so"
+    )
+    # --no-as-needed keeps the DT_NEEDED entries (there are no symbol
+    # references), and --disable-new-dtags makes the search path a DT_RPATH so
+    # the simulator's own dependencies inherit it.
+    target_link_options(tilelang_ascend_sim PRIVATE
+      "-Wl,--no-as-needed"
+      "-Wl,--disable-new-dtags"
+      "-Wl,-rpath,${_tilelang_sim_lib_dir}"
+    )
+    install(TARGETS tilelang_ascend_sim
+      LIBRARY DESTINATION tilelang/lib
+      RUNTIME DESTINATION tilelang/lib
+      ARCHIVE DESTINATION tilelang/lib)
+    message(STATUS "Ascend CPU simulation enabled: ${_tilelang_sim_lib_dir}")
+  endif()
+
+  unset(_tilelang_sim_index)
+  unset(_tilelang_sim_dir)
+  unset(_tilelang_sim_lib_dir)
+  unset(_tilelang_sim_arch_dirs)
+endif()

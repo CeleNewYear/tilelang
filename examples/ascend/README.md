@@ -24,6 +24,11 @@ auxiliary outputs such as FP8 scales and RMSNorm RSTD.
 GEMM throughput uses `2 * M * N * K` operations, including for Split-K.
 Use `--no-bench` on a top-level example to run only correctness checks.
 
+On a machine without an Ascend NPU, set `TILELANG_ASCEND_SIM=1` to execute the
+same kernels on CANN's CPU simulator; see
+[CPU simulation](../../tilelang/ascend/README.md#cpu-simulation) for the
+build-time switch and available options.
+
 Examples use the configured default target. Set `TILELANG_DEFAULT_TARGET=ascend`
 to select AscendC or `TILELANG_DEFAULT_TARGET=pto` to select PTO.
 
