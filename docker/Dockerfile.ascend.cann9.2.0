@@ -2,6 +2,9 @@
 #
 # Ascend 950 CI image, CANN 9.2.0 (stable release).
 #
+#   image: quay.io/celenewyear/tilelang-ascend
+#   tag:   cann9.2.0-ubuntu22.04-py3.12
+#
 # Contents:
 #   * CANN 9.2.0 installed from the stable .run packages published for this
 #     release: the combined "Ascend-cann" package (driver + toolkit) and the
@@ -13,12 +16,10 @@
 #     requirements*.txt). TileLang itself is deliberately NOT installed: the CI
 #     job builds the checkout under test.
 #
-# This is the stable-release sibling of docker/Dockerfile.ascend (CANN 9.3.0
-# weekly); the two differ only in the CANN packages they install.
-#
-# Built for linux/amd64 and linux/arm64 by
-# .github/workflows/build-ascend-ci-image.yml and published to
-# quay.io/celenewyear/tilelang-ascend.
+# One Dockerfile per CANN release, named after the release. The repository and
+# the tag this file publishes live in the file itself (`ARG IMAGE` / `ARG TAG`
+# in the final stage); .github/workflows/build-ascend-ci-image.yml reads them
+# and pushes the multi-arch manifest.
 
 ARG BASE=ubuntu:22.04
 
@@ -112,6 +113,16 @@ RUN set -eux; \
 # --------------------------------------------------------------------------- #
 FROM ${BASE} AS final
 ARG PY_VERSION=3.12.14
+# Where this image is published, and under which tag. The build workflow reads
+# these two lines to decide what to push, so a new release only needs a new copy
+# of this file with these two values changed.
+ARG IMAGE=quay.io/celenewyear/tilelang-ascend
+ARG TAG=cann9.2.0-ubuntu22.04-py3.12
+
+LABEL org.opencontainers.image.title="tilelang-ascend" \
+      org.opencontainers.image.version="${TAG}" \
+      org.opencontainers.image.source="https://github.com/CeleNewYear/tilelang" \
+      org.opencontainers.image.description="tilelang Ascend CI image: CANN 9.2.0, Python 3.12.14"
 
 ENV PATH=/usr/local/python${PY_VERSION}/bin:${PATH}
 ENV LD_LIBRARY_PATH=/usr/local/python${PY_VERSION}/lib:${LD_LIBRARY_PATH}

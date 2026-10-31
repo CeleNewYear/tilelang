@@ -1,19 +1,23 @@
 # syntax=docker/dockerfile:1
 #
-# Ascend 950 CI image.
+# Ascend 950 CI image, CANN 9.3.0 weekly 20261028.
+#
+#   image: quay.io/celenewyear/tilelang-ascend
+#   tag:   cann9.3.0-weekly.20261028-ubuntu22.04-py3.12
 #
 # Contents:
-#   * CANN 9.3.0 weekly (20261021) toolkit + 950 ops installed from the weekly
-#     .run packages published on the Ascend run mirror.
+#   * CANN 9.3.0 weekly (build 20261028000328247) toolkit + 950 ops, installed
+#     from the weekly .run packages published on the Ascend run mirror.
 #   * Python 3.12.14 at /usr/local/python3.12.14, matching the layout used by
 #     the public CANN base images.
 #   * TileLang's Python dependencies (torch / torch_npu pinned, plus
 #     requirements*.txt). TileLang itself is deliberately NOT installed: the CI
 #     job builds the checkout under test.
 #
-# Built for linux/amd64 and linux/arm64 by
-# .github/workflows/build-ascend-ci-image.yml and published to
-# quay.io/celenewyear/tilelang-ascend.
+# One Dockerfile per CANN release, named after the release. The repository and
+# the tag this file publishes live in the file itself (`ARG IMAGE` / `ARG TAG`
+# in the final stage); .github/workflows/build-ascend-ci-image.yml reads them
+# and pushes the multi-arch manifest.
 
 ARG BASE=ubuntu:22.04
 
@@ -47,15 +51,16 @@ RUN curl -fsSL "https://repo.huaweicloud.com/python/${PY_VERSION}/Python-${PY_VE
     && rm -rf /tmp/python.tgz /tmp/py
 
 # --------------------------------------------------------------------------- #
-# Stage 2: CANN 9.3.0 weekly (toolkit + 950 ops)
+# Stage 2: CANN 9.3.0 weekly 20261028 (toolkit + 950 ops)
 # --------------------------------------------------------------------------- #
 FROM python-builder AS cann-builder
 ARG PY_VERSION=3.12.14
 # Provided by BuildKit for `--platform` builds; must be declared to be visible.
 ARG TARGETARCH
+ARG CANN_VERSION=9.3.0~weekly.20261028.01
+# Weekly builds live under a per-build directory on the run mirror.
 ARG CANN_MIRROR=https://ascend.devcloud.huaweicloud.com/artifactory/cann-run-mirror/software/master
-ARG CANN_BUILD=20261021000325976
-ARG CANN_VERSION=9.3.0~weekly.20261021.01
+ARG CANN_BUILD=20261028000328247
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
@@ -70,6 +75,9 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip \
         attrs cython numpy decorator sympy cffi pyyaml pathlib2 \
         psutil protobuf==3.20 scipy requests absl-py
 
+# Ascend-cann-toolkit_<ver>_linux-<arch>.run installs the toolkit (compiler,
+# runtime, ops) into /usr/local/Ascend/cann-<ver>; the NPU driver is not part of
+# this package, the CI job gets it from the host through Ascend Docker Runtime.
 RUN set -eux; \
     case "${TARGETARCH}" in \
       amd64) arch=x86_64 ;; \
@@ -77,9 +85,9 @@ RUN set -eux; \
       *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     base="${CANN_MIRROR}/${CANN_BUILD}"; \
-    wget -q --tries=3 --timeout=120 \
+    wget -q --tries=3 --timeout=300 \
         "${base}/Ascend-cann-toolkit_${CANN_VERSION}_linux-${arch}.run" -O /tmp/toolkit.run; \
-    wget -q --tries=3 --timeout=120 \
+    wget -q --tries=3 --timeout=300 \
         "${base}/Ascend-cann-950-ops_${CANN_VERSION}_linux-${arch}.run" -O /tmp/ops.run; \
     chmod +x /tmp/toolkit.run /tmp/ops.run; \
     /tmp/toolkit.run --quiet --install --install-for-all; \
@@ -90,13 +98,27 @@ RUN set -eux; \
     test -n "${cann_dir}"; \
     ln -sfn "${cann_dir}" /usr/local/Ascend/cann-current; \
     echo "CANN installed at ${cann_dir} -> /usr/local/Ascend/cann-current"; \
-    test -x "${cann_dir}/bin/bisheng" && echo "bisheng present" || echo "WARNING: bisheng missing"
+    test -f "${cann_dir}/set_env.sh"; \
+    test -d "${cann_dir}/opp"; \
+    bisheng="$(find /usr/local/Ascend -maxdepth 5 -type f -name bisheng 2>/dev/null | head -n1)"; \
+    test -n "${bisheng}"; \
+    echo "bisheng: ${bisheng}"
 
 # --------------------------------------------------------------------------- #
 # Stage 3: runtime image
 # --------------------------------------------------------------------------- #
 FROM ${BASE} AS final
 ARG PY_VERSION=3.12.14
+# Where this image is published, and under which tag. The build workflow reads
+# these two lines to decide what to push, so a new release only needs a new copy
+# of this file with these two values changed.
+ARG IMAGE=quay.io/celenewyear/tilelang-ascend
+ARG TAG=cann9.3.0-weekly.20261028-ubuntu22.04-py3.12
+
+LABEL org.opencontainers.image.title="tilelang-ascend" \
+      org.opencontainers.image.version="${TAG}" \
+      org.opencontainers.image.source="https://github.com/CeleNewYear/tilelang" \
+      org.opencontainers.image.description="tilelang Ascend CI image: CANN 9.3.0 weekly 20261028, Python 3.12.14"
 
 ENV PATH=/usr/local/python${PY_VERSION}/bin:${PATH}
 ENV LD_LIBRARY_PATH=/usr/local/python${PY_VERSION}/lib:${LD_LIBRARY_PATH}
@@ -123,8 +145,22 @@ ENV TOOLCHAIN_HOME=/usr/local/Ascend/cann-current/toolkit
 ENV ASCEND_TOOLKIT_LATEST_HOME=/usr/local/Ascend/ascend-toolkit/latest
 ENV CMAKE_PREFIX_PATH=/usr/local/Ascend/cann-current/toolkit/tools/tikicpulib/lib/cmake:/usr/local/Ascend/cann-current/lib64/cmake
 ENV PYTHONPATH=/usr/local/Ascend/cann-current/python/site-packages:/usr/local/Ascend/cann-current/opp/built-in/op_impl/ai_core/tbe
-ENV PATH=/usr/local/Ascend/cann-current/bin:/usr/local/Ascend/cann-current/tools/ccec_compiler/bin:/usr/local/Ascend/cann-current/tools/profiler/bin:$PATH
+ENV PATH=/usr/local/Ascend/cann-current/bin:/usr/local/Ascend/cann-current/tools/bisheng_compiler/bin:/usr/local/Ascend/cann-current/tools/ccec_compiler/bin:/usr/local/Ascend/cann-current/tools/profiler/bin:$PATH
+# TileLang looks for the compiler at $BISHENG_HOME/bin/bisheng and then on PATH
+# (tilelang/contrib/bisheng.py). CANN 9.2.0 ships bisheng under
+# tools/bisheng_compiler, so point both at it; a stale BISHENG_HOME is harmless
+# because the lookup requires the binary to exist before it is used.
+ENV BISHENG_HOME=/usr/local/Ascend/cann-current/tools/bisheng_compiler
 ENV LD_LIBRARY_PATH=/usr/local/Ascend/cann-current/lib64:/usr/local/Ascend/cann-current/lib64/plugin/opskernel:/usr/local/Ascend/cann-current/lib64/plugin/nnengine:/usr/local/Ascend/cann-current/opp/built-in/op_impl/ai_core/tbe/op_tiling:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:$LD_LIBRARY_PATH
+
+# TileLang compiles every Ascend kernel with bisheng, so prove the image can
+# resolve it the way tilelang.contrib.bisheng does, instead of publishing an
+# image that only fails once a kernel is built.
+RUN set -eux; \
+    bisheng="$(command -v bisheng)"; \
+    test -x "${bisheng}"; \
+    echo "bisheng: ${bisheng}"; \
+    bisheng --version 2>&1 | head -n 2 || true
 
 # The cluster has no direct route to pypi.org; point pip at a reachable mirror.
 RUN printf '%s\n' \
