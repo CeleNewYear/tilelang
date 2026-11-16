@@ -8,6 +8,7 @@ name: Build Ascend CI image
 #
 #   docker/Dockerfile.ascend.cann9.2.0
 #   docker/Dockerfile.ascend.cann9.2.1
+#   docker/Dockerfile.ascend.cann9.3.0-weekly.20261014
 #   docker/Dockerfile.ascend.cann9.3.0-weekly.20261021
 #   docker/Dockerfile.ascend.cann9.3.0-weekly.20261028
 #
