@@ -11,6 +11,7 @@ name: Build Ascend CI image
 #   docker/Dockerfile.ascend.cann9.3.0-weekly.20261014
 #   docker/Dockerfile.ascend.cann9.3.0-weekly.20261021
 #   docker/Dockerfile.ascend.cann9.3.0-weekly.20261028
+#   docker/Dockerfile.ascend.cann9.3.0-weekly.20261112
 #
 # Each Dockerfile declares the repository it publishes to and the tag to publish
 # as `ARG IMAGE` / `ARG TAG`, and this workflow reads them from the file, so a

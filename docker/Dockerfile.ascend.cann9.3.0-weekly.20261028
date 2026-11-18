@@ -147,9 +147,9 @@ ENV CMAKE_PREFIX_PATH=/usr/local/Ascend/cann-current/toolkit/tools/tikicpulib/li
 ENV PYTHONPATH=/usr/local/Ascend/cann-current/python/site-packages:/usr/local/Ascend/cann-current/opp/built-in/op_impl/ai_core/tbe
 ENV PATH=/usr/local/Ascend/cann-current/bin:/usr/local/Ascend/cann-current/tools/bisheng_compiler/bin:/usr/local/Ascend/cann-current/tools/ccec_compiler/bin:/usr/local/Ascend/cann-current/tools/profiler/bin:$PATH
 # TileLang looks for the compiler at $BISHENG_HOME/bin/bisheng and then on PATH
-# (tilelang/contrib/bisheng.py). CANN 9.2.0 ships bisheng under
-# tools/bisheng_compiler, so point both at it; a stale BISHENG_HOME is harmless
-# because the lookup requires the binary to exist before it is used.
+# (tilelang/contrib/bisheng.py). CANN ships bisheng under tools/bisheng_compiler
+# and also links it into bin/, so point both at it; a stale BISHENG_HOME is
+# harmless because the lookup requires the binary to exist before it is used.
 ENV BISHENG_HOME=/usr/local/Ascend/cann-current/tools/bisheng_compiler
 ENV LD_LIBRARY_PATH=/usr/local/Ascend/cann-current/lib64:/usr/local/Ascend/cann-current/lib64/plugin/opskernel:/usr/local/Ascend/cann-current/lib64/plugin/nnengine:/usr/local/Ascend/cann-current/opp/built-in/op_impl/ai_core/tbe/op_tiling:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:$LD_LIBRARY_PATH
 
