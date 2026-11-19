@@ -4,14 +4,13 @@ name: Build Ascend CI image
 # GitHub-hosted runners (arm64 uses GitHub's official `ubuntu-22.04-arm`) and
 # publishes a multi-arch manifest to quay.io/celenewyear/tilelang-ascend.
 #
-# One Dockerfile per CANN release, named after the release:
+# One Dockerfile per (CANN release, Python line), named after both:
 #
-#   docker/Dockerfile.ascend.cann9.2.0
-#   docker/Dockerfile.ascend.cann9.2.1
-#   docker/Dockerfile.ascend.cann9.3.0-weekly.20261014
-#   docker/Dockerfile.ascend.cann9.3.0-weekly.20261021
-#   docker/Dockerfile.ascend.cann9.3.0-weekly.20261028
-#   docker/Dockerfile.ascend.cann9.3.0-weekly.20261112
+#   docker/Dockerfile.ascend.<cann>-py<X.Y>   e.g. cann9.2.0-py3.10
+#   docker/Dockerfile.ascend.<cann>          the Python 3.12 image
+#
+# CANN releases in docker/ today: cann9.2.0, cann9.2.1 (stable) and the 9.3.0
+# weeklies 20261014, 20261021, 20261028 and 20261112.
 #
 # Each Dockerfile declares the repository it publishes to and the tag to publish
 # as `ARG IMAGE` / `ARG TAG`, and this workflow reads them from the file, so a
