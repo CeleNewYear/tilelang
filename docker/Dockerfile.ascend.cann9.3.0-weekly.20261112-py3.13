@@ -63,10 +63,11 @@ ARG PY_VERSION=3.13.18
 # Provided by BuildKit for `--platform` builds; must be declared to be visible.
 ARG TARGETARCH
 ARG CANN_VERSION=9.3.0~weekly.20261112.01
-# Weekly builds live under a per-build directory on the run mirror. master/ only
-# keeps the newest builds; older ones stay available at the same path under
-# software/legacy/ if this one ever gets pruned.
-ARG CANN_MIRROR=https://ascend.devcloud.huaweicloud.com/artifactory/cann-run-mirror/software/master
+# Weekly builds live under a per-build directory on the run mirror. master/
+# only serves the newest build and is pruned aggressively -- it even dropped
+# this build's 950-ops package while keeping the toolkit -- so read from
+# software/legacy/, which keeps every weekly build.
+ARG CANN_MIRROR=https://ascend.devcloud.huaweicloud.com/artifactory/cann-run-mirror/software/legacy
 ARG CANN_BUILD=20261112000323608
 
 RUN apt-get update \
