@@ -10,7 +10,7 @@ name: Build Ascend CI image
 #   docker/Dockerfile.ascend.<cann>          the Python 3.12 image
 #
 # CANN releases in docker/ today: cann9.2.0, cann9.2.1 (stable) and the 9.3.0
-# weeklies 20261014, 20261021, 20261028 and 20261112.
+# weeklies 20261014, 20261021, 20261028, 20261112 and 20261118.
 #
 # Each Dockerfile declares the repository it publishes to and the tag to publish
 # as `ARG IMAGE` / `ARG TAG`, and this workflow reads them from the file, so a
