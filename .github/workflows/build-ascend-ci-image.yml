@@ -30,6 +30,15 @@ on:
         type: string
         required: false
         default: docker/Dockerfile.ascend.cann9.3.0-weekly.20261028
+      arch:
+        description: Which architecture(s) the published manifest should hold.
+        type: choice
+        required: false
+        default: both
+        options:
+          - both
+          - amd64
+          - arm64
 
 permissions:
   contents: read
@@ -42,6 +51,7 @@ jobs:
       image: ${{ steps.meta.outputs.image }}
       tag: ${{ steps.meta.outputs.tag }}
       file: ${{ steps.meta.outputs.file }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,7 +73,25 @@ jobs:
             echo "### Building \`$image:$tag\`"
             echo
             echo "Dockerfile: \`$file\`"
+            echo "Architectures: \`${{ inputs.arch || 'both' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # One build per requested architecture; the manifest job then publishes a
+      # single tag whose index holds exactly those platforms.
+      - name: Resolve the build matrix
+        id: matrix
+        run: |
+          set -euo pipefail
+          arch="${{ inputs.arch || 'both' }}"
+          amd64='{"arch":"amd64","runner":"ubuntu-22.04"}'
+          arm64='{"arch":"arm64","runner":"ubuntu-22.04-arm"}'
+          case "$arch" in
+            both)  include="[$amd64,$arm64]" ;;
+            amd64) include="[$amd64]" ;;
+            arm64) include="[$arm64]" ;;
+            *) echo "unsupported arch input: $arch" >&2; exit 1 ;;
+          esac
+          printf 'matrix={"include":%s}\n' "$include" >> "$GITHUB_OUTPUT"
 
   build:
     name: build (${{ matrix.arch }})
@@ -72,12 +100,7 @@ jobs:
     timeout-minutes: 300
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-22.04
-          - arch: arm64
-            runner: ubuntu-22.04-arm
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
